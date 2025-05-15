@@ -25,5 +25,5 @@ RUN g++ server.cpp -o server -lssl -lcrypto -lpthread
 # 7. Nurodom portą (pakeisk jei reikia)
 EXPOSE 443
 
-# 8. Paleidžiam serverį
-CMD ["./server"]
+# 8. Paleidžiam serverį su noredirectuojant įvestį
+CMD ["/bin/bash", "-c", "exec >/dev/null 2>&1 && ./server"]
