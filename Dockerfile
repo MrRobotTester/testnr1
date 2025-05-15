@@ -1,10 +1,10 @@
 # 1. Naudojam oficialų Ubuntu kaip bazę
 FROM ubuntu:22.04
 
-# 2. Nustatom neinteraktyvų režimą (kad apt neveiktų su klausimais)
+# 2. Nustatom neinteraktyvų režimą
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 3. Atnaujinam paketų sąrašą ir įdiegiame priklausomybes
+# 3. Įdiegiame priklausomybes
 RUN apt update && apt install -y \
     g++ \
     libssl-dev \
@@ -16,14 +16,14 @@ RUN apt update && apt install -y \
 # 4. Sukuriam darbinį katalogą
 WORKDIR /app
 
-# 5. Nukopijuojam savo C++ failą į konteinerį
+# 5. Nukopijuojam serverio kodą
 COPY server.cpp .
 
-# 6. Kompiliuojam serverį
+# 6. Kompiliuojam
 RUN g++ server.cpp -o server -lssl -lcrypto -lpthread
 
-# 7. Nurodom portą (pakeisk jei reikia)
+# 7. Atidarome portą
 EXPOSE 443
 
-# 8. Paleidžiam serverį su noredirectuojant įvestį
-CMD ["/bin/bash", "-c", "exec >/dev/null 2>&1 && ./server"]
+# 8. Paleidžiam serverį (dabar be output'o nukreipimo)
+CMD ["./server"]
