@@ -399,6 +399,7 @@ void CleanupInactiveClients() {
 }
 
 void CommandInterface() {
+    // ASCII art ir pradinė informacija
     cout << R"(
 ██╗    ██╗ ██████╗ ██████╗ ███╗   ███╗██╗  ██╗ ██████╗ ██╗     ███████╗██╗   ██╗ ██╗
 ██║    ██║██╔═══██╗██╔══██╗████╗ ████║██║  ██║██╔═══██╗██║     ██╔════╝██║   ██║███║
@@ -406,14 +407,16 @@ void CommandInterface() {
 ██║███╗██║██║   ██║██╔══██╗██║╚██╔╝██║██╔══██║██║   ██║██║     ██╔══╝  ╚██╗ ██╔╝ ██║
 ╚███╔███╔╝╚██████╔╝██║  ██║██║ ╚═╝ ██║██║  ██║╚██████╔╝███████╗███████╗ ╚████╔╝  ██║
  ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚══════╝  ╚═══╝   ╚═╝
-)";
+)" << endl;
 
     cout << "\nStarting secure command server...\n";
     cout << "[*] Server started on port 443\n";
     cout << "[*] Type 'list' to see connected clients\n";
     cout << "[*] Type 'exit' to shut down the server\n";
+    cout << "[*] Type 'broadcast <command>' to send command to all clients\n";
+    cout << "[*] Type '<client_id> <command>' to send command to specific client\n";
 
-    while (server_running) {
+    while (true) {
         cout << "\n[Server Command]> ";
         string input;
         getline(cin, input);
@@ -421,7 +424,6 @@ void CommandInterface() {
         if (input.empty()) continue;
 
         if (input == "exit") {
-            server_running = false;
             break;
         }
 
@@ -436,51 +438,72 @@ void CommandInterface() {
             continue;
         }
 
+        // Broadcast komanda visiems klientams
+        if (input.substr(0, 9) == "broadcast ") {
+            string command = input.substr(9);
+            lock_guard<mutex> lock(clients_mutex);
+            
+            if (clients.empty()) {
+                cout << "No connected clients to broadcast to\n";
+                continue;
+            }
+
+            for (auto& [id, client] : clients) {
+                if (!SendEncrypted(client.first, "execute: " + command)) {
+                    cout << "Failed to send to client '" << id << "'\n";
+                } else {
+                    cout << "Command sent to client '" << id << "'\n";
+                }
+            }
+            continue;
+        }
+
+        // Siuntimas konkretiam klientui
         size_t space_pos = input.find(' ');
-        if (space_pos == string::npos) {
-            cout << "Available commands:\n";
-            cout << "list - Show connected clients\n";
-            cout << "clean - Remove inactive clients\n";
-            cout << "exit - Shutdown server\n";
-            cout << "<client_id> <command> - Send command to client\n";
+        if (space_pos != string::npos) {
+            string client_id = input.substr(0, space_pos);
+            string command = input.substr(space_pos + 1);
+
+            lock_guard<mutex> lock(clients_mutex);
+            auto it = clients.find(client_id);
+            if (it == clients.end()) {
+                cout << "Client '" << client_id << "' not found\n";
+                continue;
+            }
+
+            if (!SendEncrypted(it->second.first, "execute: " + command)) {
+                cout << "Failed to send command to client '" << client_id << "'\n";
+            } else {
+                cout << "Command sent to client '" << client_id << "': " << command << "\n";
+            }
             continue;
         }
 
-        string client_id = input.substr(0, space_pos);
-        string command = input.substr(space_pos + 1);
-
-        lock_guard<mutex> lock(clients_mutex);
-        auto it = clients.find(client_id);
-        if (it == clients.end()) {
-            cout << "Client '" << client_id << "' not found\n";
-            continue;
-        }
-
-        if (!SendEncrypted(it->second.first, command)) {
-            cout << "Failed to send command to client '" << client_id << "'\n";
-        }
-        else {
-            cout << "Command sent to client '" << client_id << "'\n";
-        }
+        // Pagalbos meniu
+        cout << "Available commands:\n";
+        cout << "list - Show connected clients\n";
+        cout << "clean - Remove inactive clients\n";
+        cout << "exit - Shutdown server\n";
+        cout << "broadcast <command> - Send command to all clients\n";
+        cout << "<client_id> <command> - Send command to specific client\n";
     }
 }
 
 int main() {
-    cout << "Starting secure command server...\n";
-
     // Initialize OpenSSL
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();
 
     try {
         thread server_thread(StartServer, 443);
-        this_thread::sleep_for(milliseconds(100));
-
+        
+        // Leidžiame serveriui užsikrauti
+        this_thread::sleep_for(milliseconds(500));
+        
         CommandInterface();
 
-        // Clean up
-        server_running = false;
-        server_thread.join();
+        // Uždarome serverį gražiai
+        server_thread.detach();
     }
     catch (const exception& e) {
         cerr << "Critical error: " << e.what() << endl;
