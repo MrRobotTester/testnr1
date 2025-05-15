@@ -188,51 +188,64 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
     char buffer[BUFFER_SIZE];
     string client_id;
     string client_ip = inet_ntoa(client_addr.sin_addr);
+    bool authenticated = false;
 
     try {
+        // Nustatome timeout'ą ryšio nustatymui
         struct timeval timeout;
         timeout.tv_sec = CONNECTION_TIMEOUT / 1000;
         timeout.tv_usec = (CONNECTION_TIMEOUT % 1000) * 1000;
         setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
+        // Autentifikacijos procesas
         int bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
         if (bytes_received <= 0) {
             throw runtime_error("Failed to receive client ID");
         }
         buffer[bytes_received] = '\0';
 
+        // Decrypt the client ID
         client_id = DecryptMessage(string(buffer, bytes_received), iv, sizeof(iv));
         if (client_id.empty()) {
             throw runtime_error("Empty client ID");
         }
 
+        // Check client ID validity
         if (client_id != "emp_pc_1") {
             SendEncrypted(client_socket, "ERROR: Invalid client ID");
             throw runtime_error("Invalid client ID: " + client_id);
         }
 
-        if (!SendEncrypted(client_socket, "ACK")) {
+        // Send authentication acknowledgment
+        if (!SendEncrypted(client_socket, "AUTH_SUCCESS")) {
             throw runtime_error("Failed to send ACK");
         }
 
+        authenticated = true;
+
+        // Set longer timeout for normal operations
         timeout.tv_sec = (HEARTBEAT_INTERVAL + 5000) / 1000;
         timeout.tv_usec = ((HEARTBEAT_INTERVAL + 5000) % 1000) * 1000;
         setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
+        // Add client to connected clients map
         {
             lock_guard<mutex> lock(clients_mutex);
             clients[client_id] = { client_socket, steady_clock::now() };
         }
 
+        // Notify about new connection
         {
             lock_guard<mutex> lock(console_mutex);
-            cout << "[+] Client '" << client_id << "' joined from " << client_ip << endl;
+            cout << "[+] Client '" << client_id << "' connected from " << client_ip << endl;
         }
 
-        while (server_running) {
+        // Main client handling loop
+        while (true) {
             bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
             if (bytes_received <= 0) {
                 if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                    // Send heartbeat if timeout occurs
                     if (!SendEncrypted(client_socket, "PING")) {
                         break;
                     }
@@ -254,6 +267,7 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
                 continue;
             }
 
+            // Heartbeat handling
             if (message == "heartbeat") {
                 UpdateClientTimestamp(client_id);
                 try {
@@ -267,32 +281,47 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
                 continue;
             }
 
+            // Client disconnection
             if (message == "exit") {
                 lock_guard<mutex> lock(console_mutex);
                 cout << "[-] Client '" << client_id << "' disconnected" << endl;
                 break;
             }
 
+            // Command execution request
+            if (message.substr(0, 9) == "execute: ") {
+                string command = message.substr(9);
+                
+                {
+                    lock_guard<mutex> lock(console_mutex);
+                    cout << "\n[Executing on " << client_id << "]: " << command << endl;
+                }
+                
+                // Acknowledge command receipt
+                if (!SendEncrypted(client_socket, "ack: Command received")) {
+                    cerr << "Failed to send ack to client" << endl;
+                }
+                continue;
+            }
+
+            // Command result from client
+            if (message.substr(0, 8) == "result: ") {
+                string result = message.substr(8);
+                
+                {
+                    lock_guard<mutex> lock(console_mutex);
+                    cout << "\n[Result from " << client_id << "]:\n" 
+                         << result << endl;
+                    cout << "[Server Command]> " << flush;  // Restore prompt
+                }
+                continue;
+            }
+
+            // Regular message from client
             if (!message.empty()) {
                 lock_guard<mutex> lock(console_mutex);
-                cout << "\n[Command from " << client_id << "]: " << message << endl;
-                
-                // Execute command and send response
-                string response;
-                FILE* pipe = popen(message.c_str(), "r");
-                if (pipe) {
-                    char cmd_buffer[128];
-                    while (fgets(cmd_buffer, sizeof(cmd_buffer), pipe) != NULL) {
-                        response += cmd_buffer;
-                    }
-                    pclose(pipe);
-                } else {
-                    response = "Failed to execute command";
-                }
-                
-                if (!SendEncrypted(client_socket, response)) {
-                    cerr << "Failed to send command response to client" << endl;
-                }
+                cout << "\n[Message from " << client_id << "]: " << message << endl;
+                cout << "[Server Command]> " << flush;  // Restore prompt
             }
         }
     }
@@ -305,13 +334,19 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
         cerr << ": " << e.what() << endl;
     }
 
+    // Clean up client connection
     if (!client_id.empty()) {
         lock_guard<mutex> lock(clients_mutex);
         clients.erase(client_id);
     }
+    
+    if (authenticated) {
+        lock_guard<mutex> lock(console_mutex);
+        cout << "[-] Client '" << client_id << "' disconnected" << endl;
+    }
+    
     close(client_socket);
 }
-
 void StartServer(int port) {
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
