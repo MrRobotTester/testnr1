@@ -520,12 +520,30 @@ void CommandInterface() {
         cout << "<client_id> <command> - Send command to specific client\n";
     }
 }
+void StartHealthCheck() {
+    thread([]() {
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons(8080);  // Atskiras health check portas
 
+        bind(sock, (sockaddr*)&addr, sizeof(addr));
+        listen(sock, 1);
+
+        while (true) {
+            int client = accept(sock, nullptr, nullptr);
+            const char* response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+            send(client, response, strlen(response), 0);
+            close(client);
+        }
+    }).detach();
+}
 int main() {
     // Initialize OpenSSL
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();
-
+StartHealthCheck();
     try {
         cout << "[*] Starting Wormhole C2 Server..." << endl;
         
