@@ -188,9 +188,9 @@ bool SendEncrypted(int sock, const string& message) {
 
 void HandleClient(int client_socket, sockaddr_in client_addr) {
     char buffer[BUFFER_SIZE];
-    string client_id;
     string client_ip = inet_ntoa(client_addr.sin_addr);
     bool authenticated = false;
+    string client_id;
 
     try {
         // Nustatome timeout'ą ryšio nustatymui
@@ -199,15 +199,41 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
         timeout.tv_usec = (CONNECTION_TIMEOUT % 1000) * 1000;
         setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
+        // Tikriname pirmus duomenis (peek, nekeičiant bufferio)
+        int bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, MSG_PEEK);
+        if (bytes_received <= 0) {
+            close(client_socket);
+            return;
+        }
+        buffer[bytes_received] = '\0';
+
+        // Jei HTTP užklausa - atsakome ir uždarome
+        if (IsHttpRequest(buffer, bytes_received)) {
+            const char* response = "HTTP/1.1 400 Bad Request\r\n"
+                                  "Content-Type: text/plain\r\n"
+                                  "Connection: close\r\n"
+                                  "\r\n"
+                                  "This is a TCP server, please use the proper client";
+            send(client_socket, response, strlen(response), 0);
+            close(client_socket);
+            return;
+        }
+
         // Autentifikacijos procesas
-        int bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
+        bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
         if (bytes_received <= 0) {
             throw runtime_error("Failed to receive client ID");
         }
         buffer[bytes_received] = '\0';
 
         // Decrypt the client ID
-        client_id = DecryptMessage(string(buffer, bytes_received), iv, sizeof(iv));
+        try {
+            client_id = DecryptMessage(string(buffer, bytes_received), iv, sizeof(iv));
+        } catch (const exception& e) {
+            SendEncrypted(client_socket, "ERROR: Invalid encryption");
+            throw runtime_error("Decryption failed: " + string(e.what()));
+        }
+
         if (client_id.empty()) {
             throw runtime_error("Empty client ID");
         }
@@ -314,7 +340,6 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
                     lock_guard<mutex> lock(console_mutex);
                     cout << "\n[Result from " << client_id << "]:\n" 
                          << result << endl;
-                    cout << "[Server Command]> " << flush;  // Restore prompt
                 }
                 continue;
             }
@@ -323,7 +348,6 @@ void HandleClient(int client_socket, sockaddr_in client_addr) {
             if (!message.empty()) {
                 lock_guard<mutex> lock(console_mutex);
                 cout << "\n[Message from " << client_id << "]: " << message << endl;
-                cout << "[Server Command]> " << flush;  // Restore prompt
             }
         }
     }
@@ -357,7 +381,7 @@ void StartServer(int port) {
 
     // Leidžiame pakartotinį porto naudojimą
     int enable = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
         close(server_socket);
         throw runtime_error("Setsockopt failed");
     }
@@ -369,7 +393,7 @@ void StartServer(int port) {
 
     if (bind(server_socket, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         close(server_socket);
-        throw runtime_error(string("Bind failed on port ") + to_string(port) + ": " + strerror(errno));
+        throw runtime_error(string("Bind failed on port ") + to_string(port));
     }
 
     if (listen(server_socket, SOMAXCONN) < 0) {
@@ -377,25 +401,19 @@ void StartServer(int port) {
         throw runtime_error("Listen failed");
     }
 
-    {
-        lock_guard<mutex> lock(console_mutex);
-        cout << "[*] Server successfully started on port " << port << endl;
-    }
+    cout << "[*] Server successfully started on port " << port << endl;
 
-    while (server_running) {
+    while (true) {
         sockaddr_in client_addr;
         socklen_t client_addr_size = sizeof(client_addr);
         int client_socket = accept(server_socket, (sockaddr*)&client_addr, &client_addr_size);
 
         if (client_socket < 0) {
-            if (!server_running) break;
             continue;
         }
 
         thread(HandleClient, client_socket, client_addr).detach();
     }
-
-    close(server_socket);
 }
 void ListClients() {
     lock_guard<mutex> lock(clients_mutex);
@@ -538,6 +556,13 @@ void StartHealthCheck() {
             close(client);
         }
     }).detach();
+}
+bool IsHttpRequest(const char* buffer, int length) {
+    if (length < 4) return false;
+    return (strncmp(buffer, "GET ", 4) == 0) || 
+           (strncmp(buffer, "POST ", 5) == 0) ||
+           (strncmp(buffer, "HEAD ", 5) == 0) ||
+           (strncmp(buffer, "HTTP/", 5) == 0);
 }
 int main() {
     // Initialize OpenSSL
