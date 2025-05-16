@@ -12,5 +12,4 @@ WORKDIR /app
 COPY server.cpp .
 RUN g++ server.cpp -o server -lssl -lcrypto -lpthread
 
-# Naudojame tik jūsų serverį, o ne socat
 CMD ["./server"]
