@@ -39,6 +39,7 @@ map<string, pair<int, steady_clock::time_point>> clients;
 mutex clients_mutex;
 mutex console_mutex;
 bool server_running = true;
+bool IsHttpRequest(const char* buffer, int length);
 
 unsigned char aes_key[AES_KEY_SIZE / 8] = {
     0x73, 0x2F, 0x91, 0xCE, 0x44, 0x18, 0x6B, 0x3D,
